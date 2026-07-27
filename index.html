@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Beer Stripe</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h1>🍺 Beer Stripe</h1>
+    <div class="grid">
+        {% for name in housemates %}
+        <button class="beer-btn" data-name="{{ name }}" onclick="addBeer('{{ name }}')">
+            <span class="name">{{ name }}</span>
+            <span class="count" id="count-{{ name }}">{{ counts[name] }}</span>
+        </button>
+        {% endfor %}
+    </div>
+    <div class="status" id="status">All synced</div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
