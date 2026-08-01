@@ -1,3 +1,5 @@
+#
+
 """
 Beer Stripe Tracker - Flask app
 Runs locally on the touchscreen device (Chromebook).
@@ -190,6 +192,10 @@ def api_restock():
 def add_beer(name):
     if name not in HOUSEMATES:
         return jsonify({"error": "unknown housemate"}), 400
+
+    stock = get_stock_stats()
+    if stock["available"] <= 0:
+        return jsonify({"error": "out_of_stock"}), 409
 
     timestamp = datetime.now().isoformat()
     conn = get_db()
