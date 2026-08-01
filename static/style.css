@@ -254,8 +254,9 @@ h1 {
 .screensaver-title {
     font-family: 'UnifrakturMaguntia', cursive;
     font-size: 3.4rem;
-    color: #c9a545;
+    color: #faf9f7;
     text-align: center;
     text-shadow: 0 0 12px rgba(201, 165, 69, 0.35);
     letter-spacing: 0.02em;
 }
+
