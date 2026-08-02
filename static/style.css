@@ -34,12 +34,16 @@ h1 {
     flex-wrap: wrap;
 }
 
-.grid {
+.grid-wrapper {
+    position: relative;
     flex: 1;
+    min-width: 0;
+}
+
+.grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
     gap: 16px;
-    min-width: 0;
 }
 
 .beer-btn {
@@ -89,7 +93,7 @@ h1 {
 }
 
 .jester-icon {
-    color: #9b3fae;
+    color: #b90721;
 }
 
 .badge-title {
@@ -192,4 +196,66 @@ h1 {
 .restock-btn:active {
     transform: scale(0.95);
     background: #d9ac13;
+}
+
+.out-of-stock-overlay {
+    display: none;
+    position: absolute;
+    inset: 0;
+    background: rgba(2, 32, 22, 0.94);
+    border: 4px solid #e0524a;
+    border-radius: 10px;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 20px;
+}
+
+.out-of-stock-overlay.visible {
+    display: flex;
+}
+
+.out-of-stock-message {
+    font-size: 1.6rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #e0524a;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+.screensaver {
+    display: none;
+    position: fixed;
+    inset: 0;
+
+    background-image: url('https://cdn.wallpapersafari.com/2/69/xyaMLE.jpg');
+    background-size: cover;        /* Fill the entire screen */
+    background-position: center;   /* Keep the image centered */
+    background-repeat: no-repeat;  /* Don't tile the image */
+
+    align-items: center;
+    justify-content: center;
+    z-index: 999;
+    cursor: pointer;
+}
+
+.screensaver.visible {
+    display: flex;
+}
+
+.screensaver-frame {
+    border-top: 3px double #c9a545;
+    border-bottom: 3px double #c9a545;
+    padding: 28px 50px;
+    background-color: #1e5323;
+}
+
+.screensaver-title {
+    font-family: 'UnifrakturMaguntia', cursive;
+    font-size: 3.4rem;
+    color: #faf9f7;
+    text-align: center;
+    text-shadow: 0 0 12px rgba(201, 165, 69, 0.35);
+    letter-spacing: 0.02em;
 }

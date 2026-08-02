@@ -1,0 +1,369 @@
+"""
+Beer Stripe - Admin GUI
+A small desktop app (Tkinter) for restocking and viewing statistics.
+Talks to receiver.py over the network via its JSON API - so this can run
+on a totally different computer than the one running the receiver, as
+long as it can reach it (e.g. over the same WireGuard tunnel).
+"""
+
+import tkinter as tk
+from tkinter import ttk, messagebox
+import threading
+import requests
+
+# --- EDIT THIS for your setup ---
+RECEIVER_URL = "http://127.0.0.1:8000"  # the receiver PC's WireGuard IP + port
+# ----------------------------------
+
+REQUEST_TIMEOUT = 5
+
+
+class BeerAdminApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Beer Stripe - Beheer")
+        self.geometry("760x520")
+
+        status_bar = ttk.Frame(self)
+        status_bar.pack(fill="x", side="bottom")
+        self.status_label = ttk.Label(status_bar, text=f"Verbonden met {RECEIVER_URL}", anchor="w")
+        self.status_label.pack(fill="x", padx=8, pady=4)
+
+        notebook = ttk.Notebook(self)
+        notebook.pack(fill="both", expand=True)
+
+        self.current_tab = CurrentStockTab(notebook, self)
+        self.history_tab = HistoryTab(notebook, self)
+        self.alltime_tab = AlltimeTab(notebook, self)
+
+        notebook.add(self.current_tab, text="Huidige voorraad")
+        notebook.add(self.history_tab, text="Restock geschiedenis")
+        notebook.add(self.alltime_tab, text="Totaaloverzicht")
+
+        self.refresh_all()
+        self.after(15000, self._auto_refresh)
+
+    def _auto_refresh(self):
+        self.refresh_all()
+        self.after(15000, self._auto_refresh)
+
+    def refresh_all(self):
+        self.current_tab.refresh()
+        self.history_tab.refresh()
+        self.alltime_tab.refresh()
+
+    def set_status(self, text, is_error=False):
+        self.status_label.config(text=text, foreground="#b23b3b" if is_error else "#333333")
+
+    def run_in_background(self, work_fn, on_done):
+        """Runs work_fn() on a background thread so the GUI never freezes,
+        then calls on_done(result, error) back on the main thread."""
+        def task():
+            try:
+                result = work_fn()
+                error = None
+            except Exception as e:
+                result = None
+                error = e
+            self.after(0, lambda: on_done(result, error))
+        threading.Thread(target=task, daemon=True).start()
+
+    @staticmethod
+    def api_get(path):
+        resp = requests.get(f"{RECEIVER_URL}{path}", timeout=REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
+
+    @staticmethod
+    def api_post(path, payload):
+        resp = requests.post(f"{RECEIVER_URL}{path}", json=payload, timeout=REQUEST_TIMEOUT)
+        return resp
+
+
+class CurrentStockTab(ttk.Frame):
+    def __init__(self, parent, app):
+        super().__init__(parent, padding=16)
+        self.app = app
+
+        stats_frame = ttk.Frame(self)
+        stats_frame.pack(fill="x", pady=(0, 16))
+
+        self.available_var = tk.StringVar(value="-")
+        self.drunk_var = tk.StringVar(value="-")
+        self.pace_var = tk.StringVar(value="-")
+
+        self._stat_box(stats_frame, "Beschikbaar", self.available_var, 0)
+        self._stat_box(stats_frame, "Gedronken (deze ronde)", self.drunk_var, 1)
+        self._stat_box(stats_frame, "Tempo (24u)", self.pace_var, 2)
+
+        ttk.Label(self, text="Per persoon (deze ronde)", font=("", 11, "bold")).pack(anchor="w")
+
+        columns = ("name", "beers", "cost")
+        self.tree = ttk.Treeview(self, columns=columns, show="headings", height=8)
+        self.tree.heading("name", text="Naam")
+        self.tree.heading("beers", text="Bier")
+        self.tree.heading("cost", text="Te betalen")
+        self.tree.column("name", width=200)
+        self.tree.column("beers", width=100, anchor="center")
+        self.tree.column("cost", width=120, anchor="center")
+        self.tree.pack(fill="both", expand=True, pady=8)
+
+        button_row = ttk.Frame(self)
+        button_row.pack(fill="x", pady=(8, 0))
+        ttk.Button(button_row, text="Vernieuwen", command=self.refresh).pack(side="left")
+        ttk.Button(button_row, text="Nieuwe voorraad...", command=self.open_restock_dialog).pack(side="right")
+
+    def _stat_box(self, parent, label, var, col):
+        box = ttk.Frame(parent, padding=8, relief="groove")
+        box.grid(row=0, column=col, padx=6, sticky="nsew")
+        parent.grid_columnconfigure(col, weight=1)
+        ttk.Label(box, text=label, font=("", 9)).pack()
+        ttk.Label(box, textvariable=var, font=("", 20, "bold")).pack()
+
+    def refresh(self):
+        def work():
+            stock = BeerAdminApp.api_get("/api/stock")
+            counts = BeerAdminApp.api_get("/api/counts")
+            history = BeerAdminApp.api_get("/api/restocks")
+            price_per_beer = history[-1]["price_per_beer"] if history else 0
+            return {"stock": stock, "counts": counts, "price_per_beer": price_per_beer}
+
+        self.app.run_in_background(work, self._on_loaded)
+
+    def _on_loaded(self, result, error):
+        if error:
+            self.app.set_status(f"Kon geen verbinding maken: {error}", is_error=True)
+            return
+
+        self.app.set_status(f"Verbonden met {RECEIVER_URL} - laatst bijgewerkt zojuist")
+
+        stock = result["stock"]
+        self.available_var.set(stock["available"])
+        self.drunk_var.set(stock["drunk"])
+        self.pace_var.set(stock["pace_24h"])
+
+        price_per_beer = result["price_per_beer"]
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+        for name, count in sorted(result["counts"].items(), key=lambda kv: -kv[1]):
+            cost = count * price_per_beer
+            self.tree.insert("", "end", values=(name, count, f"\u20ac{cost:.2f}"))
+
+    def open_restock_dialog(self):
+        RestockDialog(self.app)
+
+
+class HistoryTab(ttk.Frame):
+    def __init__(self, parent, app):
+        super().__init__(parent, padding=16)
+        self.app = app
+
+        ttk.Label(self, text="Klik op een ronde om de verdeling per persoon te zien",
+                  font=("", 9)).pack(anchor="w", pady=(0, 8))
+
+        columns = ("label", "amount", "cost", "price_per_beer")
+        self.tree = ttk.Treeview(self, columns=columns, show="headings", height=8)
+        self.tree.heading("label", text="Ronde")
+        self.tree.heading("amount", text="Aantal")
+        self.tree.heading("cost", text="Kosten")
+        self.tree.heading("price_per_beer", text="Prijs/bier")
+        self.tree.column("label", width=180)
+        self.tree.column("amount", width=90, anchor="center")
+        self.tree.column("cost", width=90, anchor="center")
+        self.tree.column("price_per_beer", width=90, anchor="center")
+        self.tree.pack(fill="both", expand=True)
+        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+
+        ttk.Label(self, text="Verdeling per persoon", font=("", 11, "bold")).pack(anchor="w", pady=(16, 4))
+
+        breakdown_columns = ("name", "beers", "cost")
+        self.breakdown_tree = ttk.Treeview(self, columns=breakdown_columns, show="headings", height=6)
+        self.breakdown_tree.heading("name", text="Naam")
+        self.breakdown_tree.heading("beers", text="Bier")
+        self.breakdown_tree.heading("cost", text="Te betalen")
+        self.breakdown_tree.column("name", width=200)
+        self.breakdown_tree.column("beers", width=100, anchor="center")
+        self.breakdown_tree.column("cost", width=120, anchor="center")
+        self.breakdown_tree.pack(fill="both", expand=True)
+
+        self._history_by_iid = {}
+
+    def refresh(self):
+        self.app.run_in_background(
+            lambda: BeerAdminApp.api_get("/api/restocks"),
+            self._on_loaded,
+        )
+
+    def _on_loaded(self, result, error):
+        if error:
+            return  # status bar already shows the error from the current-stock tab
+
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+        self._history_by_iid.clear()
+
+        for cycle in reversed(result):  # newest first
+            iid = self.tree.insert("", "end", values=(
+                cycle["label"],
+                cycle["amount"],
+                f"\u20ac{cycle['cost']:.2f}",
+                f"\u20ac{cycle['price_per_beer']:.2f}",
+            ))
+            self._history_by_iid[iid] = cycle["id"]
+
+    def _on_select(self, event):
+        selection = self.tree.selection()
+        if not selection:
+            return
+        restock_id = self._history_by_iid.get(selection[0])
+        if restock_id is None:
+            return
+
+        self.app.run_in_background(
+            lambda: BeerAdminApp.api_get(f"/api/restocks/{restock_id}/breakdown"),
+            self._on_breakdown_loaded,
+        )
+
+    def _on_breakdown_loaded(self, result, error):
+        if error:
+            return
+
+        for row in self.breakdown_tree.get_children():
+            self.breakdown_tree.delete(row)
+
+        breakdown = result["breakdown"]
+        for name, info in sorted(breakdown.items(), key=lambda kv: -kv[1]["cost"]):
+            self.breakdown_tree.insert("", "end", values=(
+                name, info["beers"], f"\u20ac{info['cost']:.2f}",
+            ))
+
+
+class AlltimeTab(ttk.Frame):
+    def __init__(self, parent, app):
+        super().__init__(parent, padding=16)
+        self.app = app
+
+        ttk.Label(self, text="Totaal over alle rondes heen", font=("", 11, "bold")).pack(anchor="w", pady=(0, 8))
+
+        columns = ("name", "beers", "cost")
+        self.tree = ttk.Treeview(self, columns=columns, show="headings", height=12)
+        self.tree.heading("name", text="Naam")
+        self.tree.heading("beers", text="Bier (totaal)")
+        self.tree.heading("cost", text="Totaal betaald")
+        self.tree.column("name", width=220)
+        self.tree.column("beers", width=120, anchor="center")
+        self.tree.column("cost", width=140, anchor="center")
+        self.tree.pack(fill="both", expand=True)
+
+    def refresh(self):
+        self.app.run_in_background(
+            lambda: BeerAdminApp.api_get("/api/alltime"),
+            self._on_loaded,
+        )
+
+    def _on_loaded(self, result, error):
+        if error:
+            return
+
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+
+        for name, info in sorted(result.items(), key=lambda kv: -kv[1]["cost"]):
+            self.tree.insert("", "end", values=(
+                name, info["beers"], f"\u20ac{info['cost']:.2f}",
+            ))
+
+
+class RestockDialog(tk.Toplevel):
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("Nieuwe voorraad")
+        self.geometry("320x220")
+        self.resizable(False, False)
+        self.grab_set()  # modal
+
+        form = ttk.Frame(self, padding=16)
+        form.pack(fill="both", expand=True)
+
+        ttk.Label(form, text="Beheerderswachtwoord").pack(anchor="w")
+        self.password_entry = ttk.Entry(form, show="*")
+        self.password_entry.pack(fill="x", pady=(0, 10))
+
+        ttk.Label(form, text="Aantal nieuw gekochte bieren").pack(anchor="w")
+        self.amount_entry = ttk.Entry(form)
+        self.amount_entry.pack(fill="x", pady=(0, 10))
+
+        ttk.Label(form, text="Totale kosten (\u20ac)").pack(anchor="w")
+        self.cost_entry = ttk.Entry(form)
+        self.cost_entry.pack(fill="x", pady=(0, 10))
+
+        button_row = ttk.Frame(form)
+        button_row.pack(fill="x", pady=(10, 0))
+        ttk.Button(button_row, text="Annuleren", command=self.destroy).pack(side="right", padx=(6, 0))
+        self.submit_btn = ttk.Button(button_row, text="Bijwerken", command=self._submit)
+        self.submit_btn.pack(side="right")
+
+        self.password_entry.focus()
+
+    def _submit(self):
+        password = self.password_entry.get()
+        amount_raw = self.amount_entry.get().strip()
+        cost_raw = self.cost_entry.get().strip().replace(",", ".")
+
+        try:
+            amount = int(amount_raw)
+            cost = float(cost_raw) if cost_raw else 0.0
+        except ValueError:
+            messagebox.showerror("Ongeldige invoer", "Aantal moet een geheel getal zijn, kosten een bedrag.")
+            return
+
+        if amount < 0 or cost < 0:
+            messagebox.showerror("Ongeldige invoer", "Aantal en kosten moeten positief zijn.")
+            return
+
+        self.submit_btn.config(state="disabled", text="Bezig...")
+
+        def work():
+            resp = BeerAdminApp.api_post("/api/restock", {
+                "password": password,
+                "amount": amount,
+                "cost": cost,
+            })
+            return resp
+
+        self.app.run_in_background(work, self._on_result)
+
+    def _on_result(self, resp, error):
+        if error:
+            messagebox.showerror("Verbindingsfout", f"Kon niet verbinden met de server:\n{error}")
+            self.submit_btn.config(state="normal", text="Bijwerken")
+            return
+
+        if resp.status_code == 403:
+            messagebox.showerror("Verkeerd wachtwoord", "Het beheerderswachtwoord klopt niet.")
+            self.submit_btn.config(state="normal", text="Bijwerken")
+            return
+
+        if not resp.ok:
+            messagebox.showerror("Fout", f"Er ging iets mis (status {resp.status_code}).")
+            self.submit_btn.config(state="normal", text="Bijwerken")
+            return
+
+        data = resp.json()
+        if not data.get("forwarded_to_chromebook", True):
+            messagebox.showwarning(
+                "Deels gelukt",
+                "Voorraad hier opgeslagen, maar de Chromebook was niet bereikbaar. "
+                "Die blijft verouderde cijfers tonen tot hij weer online is.",
+            )
+        else:
+            messagebox.showinfo("Gelukt", "Nieuwe voorraad opgeslagen en gesynchroniseerd.")
+
+        self.app.refresh_all()
+        self.destroy()
+
+
+if __name__ == "__main__":
+    app = BeerAdminApp()
+    app.mainloop()

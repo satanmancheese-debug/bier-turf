@@ -1,4 +1,4 @@
-const DEBOUNCE_MS = 600; // ignore repeat taps on the same button within this window
+const DEBOUNCE_MS = 2; // ignore repeat taps on the same button within this window
 const lastTapTime = {};
 
 async function addBeer(name) {
@@ -13,6 +13,14 @@ async function addBeer(name) {
 
     try {
         const resp = await fetch(`/add/${encodeURIComponent(name)}`, { method: "POST" });
+
+        if (resp.status === 409) {
+            // Backend confirms stock ran out (e.g. two people tapped at once) - show
+            // the block screen instead of registering the tap.
+            fetchStock();
+            return;
+        }
+
         const counts = await resp.json();
         applyCounts(counts);
         fetchStock();
@@ -110,6 +118,11 @@ function applyStock(stock) {
     if (availEl) availEl.textContent = stock.available;
     if (drunkEl) drunkEl.textContent = stock.drunk;
     if (paceEl) paceEl.textContent = stock.pace_24h;
+
+    const overlay = document.getElementById("out-of-stock-overlay");
+    if (overlay) {
+        overlay.classList.toggle("visible", stock.available <= 0);
+    }
 }
 
 async function restock() {
@@ -144,6 +157,7 @@ async function restock() {
         const stock = await resp.json();
         applyStock(stock);
         alert("Voorraad bijgewerkt!");
+
     } catch (err) {
         alert("Kon niet verbinden met de server.");
     }
@@ -177,3 +191,48 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     fetchStock();
 });
+
+// --- Screensaver ---
+// Shows "Du Pont Pilsch Solutions" after a period of no touches, and
+// disappears again on the very next single touch/click.
+// 90 seconds of inactivity (90 * 1000 milliseconds)
+const SCREENSAVER_IDLE_MS = 10000;
+let lastInteraction = Date.now();
+
+function isScreensaverActive() {
+    return document.getElementById("screensaver").classList.contains("visible");
+}
+
+function showScreensaver() {
+    document.getElementById("screensaver").classList.add("visible");
+}
+
+function hideScreensaver() {
+    document.getElementById("screensaver").classList.remove("visible");
+    lastInteraction = Date.now();
+}
+
+function resetIdleTimer() {
+    if (!isScreensaverActive()) {
+        lastInteraction = Date.now();
+    }
+}
+
+// Listen for clicks, touches, mouse movements, and key presses
+["click", "mousemove"].forEach((eventType) => {
+    document.addEventListener(eventType, resetIdleTimer, { passive: true });
+});
+
+setInterval(() => {
+    if (!isScreensaverActive() && Date.now() - lastInteraction > SCREENSAVER_IDLE_MS) {
+        showScreensaver();
+    }
+}, 1000);
+
+const screensaverEl = document.getElementById("screensaver");
+screensaverEl.addEventListener("click", hideScreensaver);
+screensaverEl.addEventListener("touchstart", (e) => {
+    e.preventDefault(); // stop touch from firing click on underlying elements
+    hideScreensaver();
+});
+

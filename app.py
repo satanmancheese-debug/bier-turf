@@ -18,7 +18,7 @@ app = Flask(__name__)
 DB_PATH = os.path.join(os.path.dirname(__file__), "beers.db")
 
 # --- EDIT THESE FOR your setup ---
-PC_SYNC_URL = "http://192.168.1.50:6000/receive"  # your PC's local IP + port
+PC_SYNC_URL = "http://127.0.0.1:8000/receive"  # your PC's local IP + port
 HOUSEMATES = ["Arlo", "Deven", "Nienk", "Piet", "Eva", "Floris"]  # edit to your housemates
 ADMIN_PASSWORD = "changeme"  # change this! Must match the same value in pc-receiver
 # ----------------------------------
