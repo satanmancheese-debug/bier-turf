@@ -16,7 +16,7 @@ app = Flask(__name__)
 DB_PATH = os.path.join(os.path.dirname(__file__), "beers_backup.db")
 
 # --- EDIT THESE for your setup ---
-CHROMEBOOK_URL = "http://10.0.0.3:5000/api/restock"  # Chromebook's WireGuard IP
+CHROMEBOOK_URL = "http://VPN_IP:Port/api/restock"  # Chromebook's WireGuard IP
 ADMIN_PASSWORD = "changeme"  # must match the value in beer-tracker/app.py
 # -----------------------------------
 
