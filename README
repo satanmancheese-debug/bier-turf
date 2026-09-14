@@ -1,0 +1,186 @@
+# Beer Stripe Tracker - Setup Guide
+
+## What's included
+
+- `beer-tracker/` - runs on the Chromebook (touchscreen device)
+- `pc-receiver/` - runs on your main PC (backup storage)
+
+## 1. Find each device's WireGuard IP
+
+Since the Chromebook and PC are on different networks, use the
+WireGuard tunnel IP for each device (not their regular WiFi/LAN IP) -
+that's what lets them reach each other regardless of which network
+either one is actually on.
+
+On each device, run:
+```bash
+ip addr show wg0
+```
+(or check `wg show` if your interface isn't named `wg0`)
+
+You're looking for the address WireGuard assigned to that tunnel,
+typically something like `10.x.x.x`.
+
+Make sure WireGuard is enabled to auto-connect on boot on both
+devices (`sudo systemctl enable wg-quick@wg0`), otherwise the tunnel
+might be down after a reboot and syncing will silently fail until
+someone reconnects it manually.
+
+## 2. Set up the PC receiver (do this first)
+
+Your receiver PC is Linux Mint, so:
+
+```bash
+cd pc-receiver
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python3 receiver.py
+```
+
+This starts a server on port 8000 (port 6000 is blocked by Chrome and
+Firefox as an "unsafe port", so we use 8000 instead). Check it's
+working by visiting `http://localhost:8000/totals` in a browser - you
+should see `{}`.
+
+Leave this running whenever you want backups to arrive. If your PC is
+off or asleep, taps on the Chromebook still save locally and will
+sync automatically once you turn the PC back on and the Chromebook
+retries (every 30 seconds).
+
+## 3. Configure the Chromebook app
+
+Open `beer-tracker/app.py` and edit these lines near the top:
+
+```python
+PC_SYNC_URL = "http://<PC's WireGuard IP>:8000/receive"
+HOUSEMATES = ["Sanne", "Tim", "Julia", "Bram", "Noor"]  # <- your actual housemates
+ADMIN_PASSWORD = "changeme"  # <- pick a real password, keep it the same on the PC side
+```
+
+Also open `pc-receiver/receiver.py` and set:
+
+```python
+CHROMEBOOK_URL = "http://<Chromebook's WireGuard IP>:5000/api/restock"
+ADMIN_PASSWORD = "changeme"  # <- must match the value in beer-tracker/app.py
+```
+
+## 4. Run the Chromebook app
+
+```bash
+cd beer-tracker
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python3 app.py
+```
+
+Visit `http://localhost:5000` in a browser on the Chromebook. You
+should see the button grid.
+
+## 5. Make it start automatically in kiosk mode (Ubuntu)
+
+Create a systemd service so the Flask app always runs:
+
+```bash
+sudo nano /etc/systemd/system/beer-tracker.service
+```
+
+```ini
+[Unit]
+Description=Beer Stripe Tracker
+After=network.target
+
+[Service]
+ExecStart=/home/<your-user>/beer-tracker/venv/bin/python3 /home/<your-user>/beer-tracker/app.py
+WorkingDirectory=/home/<your-user>/beer-tracker
+Restart=always
+User=<your-user>
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable beer-tracker
+sudo systemctl start beer-tracker
+```
+
+Then autostart Chromium in kiosk mode pointed at the page. Create:
+
+```bash
+mkdir -p ~/.config/autostart
+nano ~/.config/autostart/kiosk.desktop
+```
+
+```ini
+[Desktop Entry]
+Type=Application
+Exec=chromium-browser --kiosk --incognito --noerrdialogs --disable-infobars http://localhost:5000
+X-GNOME-Autostart-enabled=true
+```
+
+Also set the Chromebook to auto-login (Settings > Users) and disable
+screen sleep (Settings > Power) so it stays on and awake as a wall
+display.
+
+## 6. Check backups on the PC anytime
+
+Visit `http://localhost:8000/totals` on the PC, or open
+`pc-receiver/beers_backup.db` with any SQLite browser
+(e.g. `sqlite3 beers_backup.db "SELECT * FROM beers;"`).
+
+## Notes
+
+- Each tap is saved locally on the Chromebook first (`beers.db`), so
+  nothing is lost even if the PC or WiFi is down.
+- The `/api/resync` endpoint retries any unsent taps every 30 seconds
+  automatically - no manual intervention needed.
+- To add/remove housemates, just edit the `HOUSEMATES` list in `app.py`
+  and restart the service.
+
+## Stock panel & restocking
+
+The side panel on the touchscreen shows:
+- **Beschikbaar** (available) - bought amount minus what's been drunk since the last restock
+- **Gedronken** (drunk) - beers tapped since the last restock
+- **Tempo (24u)** (pace) - beers tapped in the last rolling 24 hours
+
+**Restocking** (tap "Nieuwe voorraad" on the touchscreen, or use the PC
+admin page) resets the available/drunk counters, sets a new bought
+amount, and also resets each housemate's tap count back to 0 - so the
+leaderboard, crown, and jester badge all restart fresh for the new
+crate. The raw tap history itself isn't deleted (it's just filtered
+by "since the last restock" everywhere it's displayed), so nothing is
+actually lost if you ever want to look back at totals across restocks.
+
+Restocking is password-protected (`ADMIN_PASSWORD` in both `app.py`
+and `receiver.py` - make sure they match) since it's a destructive
+admin action, not something any housemate should trigger by accident.
+
+### Out-of-stock protection
+
+Once `available` hits 0, the button grid is covered with a red
+"Contacteer de Beheerder" screen and further taps are rejected by the
+backend too (not just hidden in the UI), so the count can never go
+negative even if two people tap at the exact same moment on the last
+beer. The screen disappears on its own as soon as an admin restocks
+(`available` goes back above 0).
+
+### Screensaver
+
+After 90 seconds of no touches, a full-screen "Du Pont Pilsch
+Solutions" screensaver appears in an old-German blackletter style. A
+single tap anywhere on it dismisses it immediately - that tap is only
+used to close the screensaver, it doesn't also register as a beer.
+To change how long it waits before appearing, edit `SCREENSAVER_IDLE_MS`
+near the bottom of `static/script.js` (currently 90000ms = 90 seconds).
+
+### PC admin dashboard
+
+Visit `http://<pc-wireguard-ip>:8000/admin` in a browser on your
+PC to see the same stock stats, the per-person totals, and a restock
+form. Restocking from here forwards the action to the Chromebook (so
+it stays the source of truth) and also logs it locally as a backup.
+If the Chromebook is unreachable when you restock from the PC, you'll
+get a warning that it's out of sync until it's back online.
